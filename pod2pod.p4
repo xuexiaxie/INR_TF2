@@ -282,6 +282,17 @@ control SwitchIngress(
         16    // max groups
     ) ecmp_selector;
 
+    // ARP 用的独立 ECMP selector
+    Hash<bit<16>>(HashAlgorithm_t.CRC16) arp_hash;
+    ActionProfile(2048) arp_ap;
+    ActionSelector(
+        arp_ap,
+        arp_hash,
+        SelectorMode_t.FAIR,
+        64,   // max group size
+        16    // max groups
+    ) arp_selector;
+
     table roce_ecmp {
         key = {
             ig_intr_md.ingress_port : exact;
@@ -303,6 +314,31 @@ control SwitchIngress(
         implementation = ecmp_selector;
         size = 1024;
     } 
+    table arp_terminate {
+        key = {
+            meta.role              : exact;    // FABRIC_A / FABRIC_B
+            hdr.arp.target_ip_addr : exact;
+        }
+        actions = {
+            forward;
+            @defaultonly nop;
+        }
+        size = 64;
+    }
+    table arp_ecmp {
+        key = {
+            ig_intr_md.ingress_port     : exact;    // 136 或 304
+            hdr.arp.sender_ip_addr      : selector; // 参与 hash，增加熵
+            hdr.arp.target_ip_addr      : selector;
+        }
+        actions = {
+            ecmp_forward;
+            @defaultonly nop;
+        }
+
+        implementation = arp_selector;
+        size = 64;
+    }
 
     apply {
         /* ----- initialize TM metadata ----- */
@@ -311,22 +347,21 @@ control SwitchIngress(
         ig_intr_md_for_tm.rid = 0;
         meta.role = role_t.FABRIC_A;
 
+        port_role.apply();
+
         if(hdr.ethernet.ether_type == (bit<16>) ether_type_t.ARP){
 			// do the broadcast to all involved ports
-			ig_intr_md_for_tm.mcast_grp_a = MCAST_GRP_ID;
-			ig_intr_md_for_tm.rid = 0;
+			if (meta.role == role_t.EDGE1 || meta.role == role_t.EDGE2) {
+                arp_ecmp.apply();
+            } else {
+                arp_terminate.apply();
+            }
 		} else {
-            if (hdr.bth.isValid()) {
-                port_role.apply();
-                if (meta.role == role_t.EDGE1) {
-                    roce_ecmp.apply();
-                }
-                else if (meta.role == role_t.EDGE2) {
-                    roce_ecmp.apply();
-                }
-                else {
-                    fabric_terminate.apply();
-                }
+            if (meta.role == role_t.EDGE1 || meta.role == role_t.EDGE2) {
+                roce_ecmp.apply();
+            }
+            else {
+                fabric_terminate.apply();
             }
         }
     }
