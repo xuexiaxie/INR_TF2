@@ -322,3 +322,89 @@ class TestQueueAFC(BfRuntimeTest):
 
 
         logger.info("ecmp + arp configured OK.")
+
+        # ====================================================================
+        # RECONFIGURATION: replace ports 192,193 -> 168,169  (grp1)
+        #                            312,313 -> 296,297  (grp2)
+        # Pre-add new members BEFORE the trigger so the actual switch is atomic
+        # ====================================================================
+        new_ports_grp1 = [168, 169]   # replacing 192, 193
+        new_ports_grp2 = [296, 297]   # replacing 312, 313
+
+        new_grp1_member_ids = []
+        new_grp2_member_ids = []
+        mid = member_id   # continues from where member_id left off (= 17)
+
+        ap = bfrt_info.table_get("SwitchIngress.ecmp_ap")
+        for p in new_ports_grp1:
+            ap.entry_add(target,
+                [ap.make_key([gc.KeyTuple('$ACTION_MEMBER_ID', mid)])],
+                [ap.make_data([gc.DataTuple('port', p)], 'SwitchIngress.ecmp_forward')]
+            )
+            new_grp1_member_ids.append(mid)
+            mid += 1
+        for p in new_ports_grp2:
+            ap.entry_add(target,
+                [ap.make_key([gc.KeyTuple('$ACTION_MEMBER_ID', mid)])],
+                [ap.make_data([gc.DataTuple('port', p)], 'SwitchIngress.ecmp_forward')]
+            )
+            new_grp2_member_ids.append(mid)
+            mid += 1
+
+        arp_ap = bfrt_info.table_get("SwitchIngress.arp_ap")
+        for p in new_ports_grp1:
+            arp_ap.entry_add(target,
+                [arp_ap.make_key([gc.KeyTuple('$ACTION_MEMBER_ID', mid)])],
+                [arp_ap.make_data([gc.DataTuple('port', p)], 'SwitchIngress.ecmp_forward')]
+            )
+            new_grp1_member_ids.append(mid)   # note: reusing list for arp too
+            mid += 1
+        for p in new_ports_grp2:
+            arp_ap.entry_add(target,
+                [arp_ap.make_key([gc.KeyTuple('$ACTION_MEMBER_ID', mid)])],
+                [arp_ap.make_data([gc.DataTuple('port', p)], 'SwitchIngress.ecmp_forward')]
+            )
+            new_grp2_member_ids.append(mid)
+            mid += 1
+
+        logger.info("New ECMP members pre-added. Waiting for T_trigger ...")
+
+        # ====================================================================
+        # TRIGGER: wait T seconds then atomically switch to new ECMP members
+        # Set T_trigger to the same wall-clock offset used by rdma_sender
+        # (both scripts should be started at the same time; sender starts
+        #  at its own T=0 aligned with base_trace_t in the trace file)
+        # ====================================================================
+        import time
+        T_trigger = 5.0   # seconds after this script starts
+        time.sleep(T_trigger)
+
+        # Build updated group member-id lists:
+        # grp1: keep ids 3..8 (ports 194,195,184,185,186,187), swap ids 1,2 -> new
+        # grp1_member_ids = [1,2,3,4,5,6,7,8]  (192,193,194,195,184,185,186,187)
+        updated_grp1_ids    = new_grp1_member_ids[:2] + grp1_member_ids[2:]
+        # grp2: keep ids 11..16 (314,315,320,321,322,323), swap ids 9,10 -> new
+        # grp2_member_ids = [9,10,11,12,13,14,15,16]  (312,313,314,315,320,321,322,323)
+        updated_grp2_ids    = new_grp2_member_ids[:2] + grp2_member_ids[2:]
+
+        # Only update ecmp_selector (RDMA traffic). arp_selector is left unchanged:
+        # ARP is only used when establishing the connection; data path uses roce_ecmp.
+        selector = bfrt_info.table_get("SwitchIngress.ecmp_selector")
+        selector.entry_mod(target,
+            [selector.make_key([gc.KeyTuple('$SELECTOR_GROUP_ID', 1)])],
+            [selector.make_data([
+                gc.DataTuple('$MAX_GROUP_SIZE', 64),
+                gc.DataTuple('$ACTION_MEMBER_ID', int_arr_val=updated_grp1_ids),
+                gc.DataTuple('$ACTION_MEMBER_STATUS', bool_arr_val=[True]*len(updated_grp1_ids))
+            ])]
+        )
+        selector.entry_mod(target,
+            [selector.make_key([gc.KeyTuple('$SELECTOR_GROUP_ID', 2)])],
+            [selector.make_data([
+                gc.DataTuple('$MAX_GROUP_SIZE', 64),
+                gc.DataTuple('$ACTION_MEMBER_ID', int_arr_val=updated_grp2_ids),
+                gc.DataTuple('$ACTION_MEMBER_STATUS', bool_arr_val=[True]*len(updated_grp2_ids))
+            ])]
+        )
+
+        logger.info("pod2pod ECMP reconfigured at T=%.6f (192,193->168,169 / 312,313->296,297)" % time.time())
