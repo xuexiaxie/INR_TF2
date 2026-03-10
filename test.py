@@ -97,33 +97,6 @@ class TestQueueAFC(BfRuntimeTest):
                 'SwitchIngress.forward'
             )]
         )
-
-        arp_term = bfrt_info.table_get("SwitchIngress.arp_terminate")
-        # FABRIC_A (ports_grp1 ingress) -> host1 (192.168.41.3 via port 136)
-        arp_term.entry_add(
-            target,
-            [arp_term.make_key([
-                gc.KeyTuple('meta.role', 3),   # FABRIC_A
-                gc.KeyTuple('hdr.arp.target_ip_addr', IP_HOST1)  # 192.168.41.3
-            ])],
-            [arp_term.make_data(
-                [gc.DataTuple('port', port_src)],   # 136
-                'SwitchIngress.forward'
-            )]
-        )
-
-        # FABRIC_B (ports_grp2 ingress) -> host2 (192.168.41.2 via port 304)
-        arp_term.entry_add(
-            target,
-            [arp_term.make_key([
-                gc.KeyTuple('meta.role', 2),   # FABRIC_B
-                gc.KeyTuple('hdr.arp.target_ip_addr', IP_HOST2)  # 192.168.41.2
-            ])],
-            [arp_term.make_data(
-                [gc.DataTuple('port', port_dst)],   # 304
-                'SwitchIngress.forward'
-            )]
-        )
         # -----------------------------
         # Step 0: 配置简单 ECMP 转发表
         # -----------------------------
@@ -221,107 +194,51 @@ class TestQueueAFC(BfRuntimeTest):
             ])]
         )
 
-        # -----------------------------
-        # Step 0: 配置简单 ECMP 转发表
-        # -----------------------------
-        ap = bfrt_info.table_get("SwitchIngress.arp_ap")
-        grp1_member_ids = []
-        grp2_member_ids = []
-        member_id = 1 #从1开始分配内部id
-
-        #-----------------group1 members ------------------
-        for p in ports_grp1:
-            ap.entry_add(
-                target,
-                [ap.make_key([
-                    gc.KeyTuple('$ACTION_MEMBER_ID', member_id)
-                ])],
-                [ap.make_data(
-                    [gc.DataTuple('port', p)],
-                    'SwitchIngress.ecmp_forward'
-                )]
-            )
-            grp1_member_ids.append(member_id)
-            member_id += 1
-        #-----------------group2 members ------------------
-        for p in ports_grp2:
-            ap.entry_add(
-                target,
-                [ap.make_key([
-                    gc.KeyTuple('$ACTION_MEMBER_ID', member_id)
-                ])],
-                [ap.make_data(
-                    [gc.DataTuple('port', p)],
-                    'SwitchIngress.ecmp_forward'
-                )]
-            )
-            grp2_member_ids.append(member_id)
-            member_id += 1
-        # =====================================
-        # 创建selector groups
-        # =====================================
-        arp_selector = bfrt_info.table_get("SwitchIngress.arp_selector")
-        arp_selector.entry_add(
+        # ARP fixed path: edge ARP always uses 184-320 (unchanged when RoCE ECMP is updated)
+        ARP_FIXED_PORT_GRP1 = 194
+        ARP_FIXED_PORT_GRP2 = 314
+        arp_fixed_path_tbl = bfrt_info.table_get("SwitchIngress.arp_fixed_path")
+        arp_fixed_path_tbl.entry_add(
             target,
-            [arp_selector.make_key([
-                gc.KeyTuple('$SELECTOR_GROUP_ID', 1)
+            [arp_fixed_path_tbl.make_key([
+                gc.KeyTuple('ig_intr_md.ingress_port', port_src) #136
             ])],
-            [arp_selector.make_data([
-                gc.DataTuple('$MAX_GROUP_SIZE', 64),
-
-                gc.DataTuple('$ACTION_MEMBER_ID',
-                            int_arr_val=grp1_member_ids),
-
-                gc.DataTuple('$ACTION_MEMBER_STATUS',
-                            bool_arr_val=[True]*len(grp1_member_ids))
-            ])]
+            [arp_fixed_path_tbl.make_data(
+                [gc.DataTuple('port', ARP_FIXED_PORT_GRP1)], #194
+                'SwitchIngress.forward'
+            )]
         )
-        arp_selector.entry_add(
+        arp_fixed_path_tbl.entry_add(
             target,
-            [arp_selector.make_key([
-                gc.KeyTuple('$SELECTOR_GROUP_ID', 2)
+            [arp_fixed_path_tbl.make_key([
+                gc.KeyTuple('ig_intr_md.ingress_port', ARP_FIXED_PORT_GRP2) #314
             ])],
-            [arp_selector.make_data([
-                gc.DataTuple('$MAX_GROUP_SIZE', 64),
-
-                gc.DataTuple(
-                    '$ACTION_MEMBER_ID',
-                    int_arr_val=grp2_member_ids
-                ),
-
-                gc.DataTuple(
-                    '$ACTION_MEMBER_STATUS',
-                    bool_arr_val=[True]*len(grp2_member_ids)
-                )
-            ])]
+            [arp_fixed_path_tbl.make_data(
+                [gc.DataTuple('port', port_dst)], #304
+                'SwitchIngress.forward'
+            )]
         )
-
-        arp_ecmp_tbl = bfrt_info.table_get("SwitchIngress.arp_ecmp")
-        # ARP 从 136 进来：在 ports_grp1 上 ECMP
-        arp_ecmp_tbl.entry_add(
+        arp_fixed_path_tbl.entry_add(
             target,
-            [arp_ecmp_tbl.make_key([
-                gc.KeyTuple('ig_intr_md.ingress_port', port_src)  # 136
+            [arp_fixed_path_tbl.make_key([
+                gc.KeyTuple('ig_intr_md.ingress_port', port_dst) #304
             ])],
-            [arp_ecmp_tbl.make_data([
-                gc.DataTuple('$SELECTOR_GROUP_ID', 1)  # 同 group1
-            ])]
+            [arp_fixed_path_tbl.make_data(
+                [gc.DataTuple('port', ARP_FIXED_PORT_GRP2)], #314
+                'SwitchIngress.forward'
+            )]
         )
-
-        # ARP 从 304 进来：在 ports_grp2 上 ECMP
-        arp_ecmp_tbl.entry_add(
+        arp_fixed_path_tbl.entry_add(
             target,
-            [arp_ecmp_tbl.make_key([
-                gc.KeyTuple('ig_intr_md.ingress_port', port_dst)  # 304
+            [arp_fixed_path_tbl.make_key([
+                gc.KeyTuple('ig_intr_md.ingress_port', ARP_FIXED_PORT_GRP1) #194
             ])],
-            [arp_ecmp_tbl.make_data([
-                gc.DataTuple('$SELECTOR_GROUP_ID', 2)  # 同 group2
-            ])]
+            [arp_fixed_path_tbl.make_data(
+                [gc.DataTuple('port', port_src)], #136
+                'SwitchIngress.forward'
+            )]
         )
-
-
-
-        logger.info("ecmp + arp configured OK.")
+        logger.info("ecmp + arp configured OK .")
 
         # ====================================================================
         # RECONFIGURATION: replace ports 192,193 -> 168,169  (grp1)
@@ -351,21 +268,19 @@ class TestQueueAFC(BfRuntimeTest):
             new_grp2_member_ids.append(mid)
             mid += 1
 
-        arp_ap = bfrt_info.table_get("SwitchIngress.arp_ap")
         for p in new_ports_grp1:
-            arp_ap.entry_add(target,
-                [arp_ap.make_key([gc.KeyTuple('$ACTION_MEMBER_ID', mid)])],
-                [arp_ap.make_data([gc.DataTuple('port', p)], 'SwitchIngress.ecmp_forward')]
+            port_role.entry_add(
+                target,
+                [port_role.make_key([gc.KeyTuple('ig_intr_md.ingress_port', p)])],
+                [port_role.make_data([], 'SwitchIngress.set_fabric_a')]
             )
-            new_grp1_member_ids.append(mid)   # note: reusing list for arp too
-            mid += 1
+
         for p in new_ports_grp2:
-            arp_ap.entry_add(target,
-                [arp_ap.make_key([gc.KeyTuple('$ACTION_MEMBER_ID', mid)])],
-                [arp_ap.make_data([gc.DataTuple('port', p)], 'SwitchIngress.ecmp_forward')]
+            port_role.entry_add(
+                target,
+                [port_role.make_key([gc.KeyTuple('ig_intr_md.ingress_port', p)])],
+                [port_role.make_data([], 'SwitchIngress.set_fabric_b')]
             )
-            new_grp2_member_ids.append(mid)
-            mid += 1
 
         logger.info("New ECMP members pre-added. Waiting for T_trigger ...")
 
@@ -376,7 +291,7 @@ class TestQueueAFC(BfRuntimeTest):
         #  at its own T=0 aligned with base_trace_t in the trace file)
         # ====================================================================
         import time
-        T_trigger = 5.0   # seconds after this script starts
+        T_trigger = 3.0  # seconds after this script starts
         time.sleep(T_trigger)
 
         # Build updated group member-id lists:
@@ -387,7 +302,6 @@ class TestQueueAFC(BfRuntimeTest):
         # grp2_member_ids = [9,10,11,12,13,14,15,16]  (312,313,314,315,320,321,322,323)
         updated_grp2_ids    = new_grp2_member_ids[:2] + grp2_member_ids[2:]
 
-        # Only update ecmp_selector (RDMA traffic). arp_selector is left unchanged:
         # ARP is only used when establishing the connection; data path uses roce_ecmp.
         selector = bfrt_info.table_get("SwitchIngress.ecmp_selector")
         selector.entry_mod(target,
