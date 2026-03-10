@@ -1,0 +1,7 @@
+/sde/bf-sde-9.7.1/install/share/p4/targets/tofino2/pod2pod.conf
+/sde/bf-sde-9.7.1/install/share/tofino2pd/pod2pod/bf-rt.json
+/sde/bf-sde-9.7.1/install/share/tofino2pd/pod2pod/pipe/context.json
+/sde/bf-sde-9.7.1/install/share/tofino2pd/pod2pod/pipe/tofino2.bin
+/sde/bf-sde-9.7.1/install/share/tofino2pd/pod2pod/source.json
+/sde/bf-sde-9.7.1/install/share/tofino2pd/pod2pod/frontend-ir.json
+/sde/bf-sde-9.7.1/install/share/tofino2pd/pod2pod/events.json
